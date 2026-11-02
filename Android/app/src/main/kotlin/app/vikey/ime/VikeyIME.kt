@@ -109,9 +109,15 @@ class VikeyIME : InputMethodService(), KeyboardView.Listener, EmojiKeyboardView.
         KeyboardView.searchTop = null
         root = FrameLayout(this)
         root.setBackgroundColor(if (isDark) 0xFF2B2B2D.toInt() else 0xFFD1D4DA.toInt())   // the system keyboard's background
-        root.setOnApplyWindowInsetsListener { v, insets ->   // keep the keys above the gesture bar
-            val b = if (Build.VERSION.SDK_INT >= 30) insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom else @Suppress("DEPRECATION") insets.systemWindowInsetBottom
-            v.setPadding(0, 0, 0, b); insets
+        // The input window reaches behind the system bars, so the keyboard asks for the navigation bar's height on
+        // top of its own and keeps its keys above it. Padding the root instead did nothing: the IME sizes the window
+        // from the child view, so the window stayed 682 px and an opaque three-button bar (126 px) covered the
+        // whole last row - only 556 of the 682 px were ever visible.
+        @Suppress("DEPRECATION")
+        root.setOnApplyWindowInsetsListener { _, i ->
+            val b = if (Build.VERSION.SDK_INT >= 30) i.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom else i.systemWindowInsetBottom
+            if (b != navInset) { navInset = b; applyHeight() }
+            i
         }
         keyboard = KeyboardView(this)
         keyboard.listener = this
@@ -124,8 +130,11 @@ class VikeyIME : InputMethodService(), KeyboardView.Listener, EmojiKeyboardView.
 
     override fun onEvaluateFullscreenMode() = false
 
+    /** What the system bars take from the bottom of the screen. The input window draws behind them, so the keyboard
+     *  asks for this much height on top of its own and the last row stays clear of the navigation bar. */
+    private var navInset = 0
     private val compact get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && resources.configuration.smallestScreenWidthDp < 600
-    private fun heightPx() = (KeyboardView.keyboardHeight(compact) * resources.displayMetrics.density).toInt()
+    private fun heightPx() = (KeyboardView.keyboardHeight(compact) * resources.displayMetrics.density).toInt() + navInset
     private fun applyHeight() {
         keyboard.layoutParams = keyboard.layoutParams.apply { height = heightPx() }
         keyboard.relayout(); root.requestLayout()
