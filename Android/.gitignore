@@ -6,3 +6,5 @@ keystore.properties
 *.keystore
 *.jks
 .kotlin/
+# emulator verification captures, kept in the project but not committed
+Tests/shots/

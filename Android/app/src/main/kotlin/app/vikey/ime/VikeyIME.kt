@@ -334,8 +334,7 @@ class VikeyIME : InputMethodService(), KeyboardView.Listener, EmojiKeyboardView.
                 lastShiftTap = t
             }
             is KeyKind.Layer -> keyboard.layer = kind.l
-            KeyKind.Language -> { lastCorrection = null; driver.manualSwitch(now); fieldLanguage = null; saveLanguage(); refresh() }
-            KeyKind.Globe -> if (Build.VERSION.SDK_INT >= 28) switchToNextInputMethod(false) else keyboardGlobeHold()
+            KeyKind.Globe -> { lastCorrection = null; driver.manualSwitch(now); fieldLanguage = null; saveLanguage(); refresh() }   // the globe is the VI/EN switch; its hold opens the system picker
             KeyKind.Emoji -> showEmoji()
         }
     }

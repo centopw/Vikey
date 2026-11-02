@@ -25,7 +25,7 @@ import kotlin.math.min
 sealed class KeyKind {
     data class Char(val c: String) : KeyKind()     // inserts this (letters stored lowercase)
     object Shift : KeyKind(); object Backspace : KeyKind(); object Space : KeyKind(); object Return : KeyKind()
-    object Globe : KeyKind(); object Language : KeyKind(); object Emoji : KeyKind()
+    object Globe : KeyKind(); object Emoji : KeyKind()
     data class Layer(val l: KeyboardView.Layer) : KeyKind()
 }
 
@@ -130,6 +130,10 @@ class KeyboardView(ctx: Context) : View(ctx) {
     private var alternates: List<String> = emptyList()
     private var alternateIndex = 0
     private val alternatesRect = RectF()
+    // icon picker (123 hold: emoji / IME switch)
+    private var iconPickerFor: Key? = null
+    private var iconPickerIcons: List<Int> = emptyList()
+    private var iconPickerIndex = 0
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
@@ -150,9 +154,9 @@ class KeyboardView(ctx: Context) : View(ctx) {
         fun chars(s: String) = s.map { KeyKind.Char(it.toString()) as KeyKind }
         val bottom = ArrayList<KeyKind>()
         bottom.add(if (layer == Layer.LETTERS) KeyKind.Layer(Layer.NUMBERS) else KeyKind.Layer(Layer.LETTERS))
-        bottom.add(KeyKind.Emoji)
-        if (showsGlobe) bottom.add(KeyKind.Globe)
-        bottom.addAll(listOf(KeyKind.Language, KeyKind.Space, KeyKind.Return))
+        // the globe is now the VI/EN switch, so it stays even when no other keyboard is installed
+        bottom.add(KeyKind.Globe)
+        bottom.addAll(listOf(KeyKind.Space, KeyKind.Return))
         return when (layer) {
             Layer.LETTERS -> listOf(chars("qwertyuiop"), chars("asdfghjkl"), listOf(KeyKind.Shift) + chars("zxcvbnm") + listOf(KeyKind.Backspace), bottom)
             Layer.NUMBERS -> listOf(chars("1234567890"), chars("-/:;()$&@\""), listOf<KeyKind>(KeyKind.Layer(Layer.SYMBOLS)) + chars(".,?!'") + listOf(KeyKind.Backspace), bottom)
@@ -201,9 +205,9 @@ class KeyboardView(ctx: Context) : View(ctx) {
                 else -> {
                     val small = 43.3f * s * d; val ret = 92.6f * s * d
                     var x = side
-                    for (kind in row) when (kind) {
-                        KeyKind.Space -> { val w = W - side - ret - gap - x; frames.add(rect(x, w)); x += w + gap }
-                        KeyKind.Return -> frames.add(rect(W - side - ret, ret))
+                    for (kind in row) when {
+                        kind == KeyKind.Space -> { val w = W - side - ret - gap - x; frames.add(rect(x, w)); x += w + gap }
+                        kind == KeyKind.Return -> frames.add(rect(W - side - ret, ret))
                         else -> { frames.add(rect(x, small)); x += small + gap }
                     }
                 }
@@ -225,7 +229,11 @@ class KeyboardView(ctx: Context) : View(ctx) {
     }
 
     val sideInset get() = 6.67f * (width / (402 * d)) * d
-    private fun barRect(): RectF { val dh = diagH(compact) * d; val side = sideInset; return RectF(side, dh + 2 * d, width - side, dh + (BAR_H - 2) * d) }
+    /** The strip begins at the side inset. */
+    private fun barRect(): RectF {
+        val dh = diagH(compact) * d; val side = sideInset
+        return RectF(side, dh + 2 * d, width - side, dh + (BAR_H - 2) * d)
+    }
 
     // MARK: drawing
 
@@ -249,7 +257,6 @@ class KeyboardView(ctx: Context) : View(ctx) {
         for (k in keys) {
             var bg = keyColor; var tint = fg
             if (k.kind == KeyKind.Return && returnIsBlue) { bg = Color.rgb(0, 122, 255); tint = Color.WHITE }
-            if (k.kind == KeyKind.Language) tint = brand
             if (cursorMode) bg = if (dark) Color.rgb(82, 82, 82) else Color.rgb(237, 237, 237)
             if (k.pressed) bg = pressedColor
             // the 1 pt shadow under each key (black at 0.22, like iOS)
@@ -260,6 +267,7 @@ class KeyboardView(ctx: Context) : View(ctx) {
         }
         popupKey?.let { drawPopup(c, it) }
         alternatesFor?.let { drawAlternates(c) }
+        iconPickerFor?.let { drawIconPicker(c) }
     }
 
     private fun label(kind: KeyKind): Pair<String?, Int?> = when (kind) {
@@ -270,7 +278,6 @@ class KeyboardView(ctx: Context) : View(ctx) {
         KeyKind.Return -> if (returnTitle == null) null to R.drawable.ic_return else returnTitle to null
         KeyKind.Globe -> null to R.drawable.ic_globe
         KeyKind.Emoji -> null to R.drawable.ic_emoji
-        KeyKind.Language -> languageShort to null
         is KeyKind.Layer -> (when (kind.l) { Layer.LETTERS -> "ABC"; Layer.NUMBERS -> "123"; Layer.SYMBOLS -> "#+=" }) to null
     }
 
@@ -290,7 +297,6 @@ class KeyboardView(ctx: Context) : View(ctx) {
             is KeyKind.Char -> { text.typeface = Typeface.DEFAULT; text.textSize = (if (layer == Layer.LETTERS) 23f else 22f) * d }
             KeyKind.Space -> { text.typeface = Typeface.DEFAULT; text.textSize = 15 * d
                 val maxW = k.frame.width() - 8 * d; while (text.measureText(t) > maxW && text.textSize > 9 * d) text.textSize -= d }
-            KeyKind.Language -> { text.typeface = semibold; text.textSize = 16 * d }
             KeyKind.Return -> { text.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); text.textSize = 16 * d }
             else -> { text.typeface = Typeface.DEFAULT; text.textSize = 16 * d }
         }
@@ -440,12 +446,18 @@ class KeyboardView(ctx: Context) : View(ctx) {
             KeyKind.Backspace -> { listener?.keyboardDidTap(KeyKind.Backspace); repeatCount = 0; startHold(450) { startRepeat() } }
             KeyKind.Space -> startHold(400) { enterCursorMode(lastX) }
             KeyKind.Shift -> listener?.keyboardDidTap(KeyKind.Shift)
-            KeyKind.Globe -> startHold(500) { listener?.keyboardGlobeHold(); touchKey?.let { release(it) }; reset() }
+            // tap (on lift) toggles VI/EN; holding offers the system keyboard picker, when there is another keyboard to offer
+            KeyKind.Globe -> if (showsGlobe) startHold(500) { listener?.keyboardGlobeHold(); touchKey?.let { release(it) }; reset() }
             is KeyKind.Layer -> {
                 // the system keyboard switches on touch-down and lets you slide onto a symbol
                 listener?.keyboardDidTap(kind)
                 slideFromLayer = true
-                keyAt(x, y)?.let { nc -> touchKey = nc; nc.pressed = true }
+                val prevKey = touchKey
+                keyAt(x, y)?.let { nc ->
+                    touchKey = nc; nc.pressed = true
+                    if (nc !== prevKey && prevKey?.kind is KeyKind.Layer) { cancelHold(); slideFromLayer = false }
+                    else startHold(500) { showIconPicker(nc) }
+                }
             }
             else -> {}
         }
@@ -470,6 +482,7 @@ class KeyboardView(ctx: Context) : View(ctx) {
             return
         }
         if (alternatesFor != null) { alternateIndex = (((x - alternatesRect.left - 4 * d) / (34 * d)).toInt()).coerceIn(0, alternates.size - 1); return }
+        if (iconPickerFor != null) { iconPickerIndex = (((x - alternatesRect.left - 4 * d) / (34 * d)).toInt()).coerceIn(0, 1); return }
         val k = current.kind
         if (k == KeyKind.Backspace || k == KeyKind.Shift) return
         if (!slideFromLayer && hypot(x - touchStartX, y - touchStartY) <= 14 * d) return   // a tap wobbles
@@ -478,6 +491,8 @@ class KeyboardView(ctx: Context) : View(ctx) {
         tmp.set(c.frame); tmp.inset(2 * d, 2 * d)
         if (!tmp.contains(x, y)) return
         val nk = c.kind
+        // sliding off a Layer key to a different key: cancel the hold (no icon picker when sliding away)
+        if (slideFromLayer && k is KeyKind.Layer && nk !is KeyKind.Layer && nk != KeyKind.Globe) { cancelHold(); slideFromLayer = false; release(current); touchKey = c; c.pressed = true; return }
         if (nk == KeyKind.Globe || nk == KeyKind.Backspace || nk == KeyKind.Shift) return
         release(current)
         touchKey = c; c.pressed = true
@@ -499,6 +514,12 @@ class KeyboardView(ctx: Context) : View(ctx) {
         } else if (alternatesFor != null) {
             alternates.getOrNull(alternateIndex)?.let { listener?.keyboardInsertAlternate(it) }
             alternatesFor = null
+        } else if (iconPickerFor != null) {
+            when (iconPickerIndex) {
+                0 -> listener?.keyboardDidTap(KeyKind.Emoji)
+                1 -> listener?.keyboardGlobeHold()
+            }
+            iconPickerFor = null
         } else when (val kind = k.kind) {
             KeyKind.Backspace, KeyKind.Shift, is KeyKind.Layer -> {}   // handled on touch-down
             else -> {
@@ -513,7 +534,7 @@ class KeyboardView(ctx: Context) : View(ctx) {
     private fun reset() {
         cancelHold()
         pointerId = -1; touchKey = null; slideFromLayer = false
-        popupKey = null; alternatesFor = null
+        popupKey = null; alternatesFor = null; iconPickerFor = null
         if (cursorMode) { cursorMode = false; listener?.keyboardCursorModeEnded() }
     }
 
@@ -547,5 +568,34 @@ class KeyboardView(ctx: Context) : View(ctx) {
         alternatesRect.set(x, max(0f, k.frame.top - h - 6 * d), x + total, max(0f, k.frame.top - h - 6 * d) + h)
         alternatesFor = k
         if (haptics) tick()
+    }
+
+    private fun showIconPicker(k: Key) {
+        popupKey = null; alternatesFor = null
+        iconPickerIcons = listOf(R.drawable.ic_emoji, R.drawable.ic_globe)
+        iconPickerIndex = 0
+        val w = 34 * d; val h = 46 * d
+        val total = iconPickerIcons.size * w + 8 * d
+        var x = k.frame.left - 4 * d
+        if (x + total > width - 2 * d) x = width - 2 * d - total
+        x = max(2 * d, x)
+        alternatesRect.set(x, max(0f, k.frame.top - h - 6 * d), x + total, max(0f, k.frame.top - h - 6 * d) + h)
+        iconPickerFor = k
+        if (haptics) tick()
+    }
+
+    private fun drawIconPicker(c: Canvas) {
+        fill.color = keyColor
+        fill.setShadowLayer(4 * d, 0f, d, Color.argb(71, 0, 0, 0))
+        c.drawRoundRect(alternatesRect, 10 * d, 10 * d, fill); fill.clearShadowLayer()
+        val w = 34 * d
+        for ((i, id) in iconPickerIcons.withIndex()) {
+            tmp.set(alternatesRect.left + 4 * d + i * w, alternatesRect.top, alternatesRect.left + 4 * d + (i + 1) * w, alternatesRect.bottom)
+            if (i == iconPickerIndex) { fill.color = Color.rgb(0, 122, 255); tmp.inset(d, 5 * d); c.drawRoundRect(tmp, 7 * d, 7 * d, fill); tmp.inset(-d, -5 * d) }
+            val dr = icon(id); dr.setTint(if (i == iconPickerIndex) Color.WHITE else fg)
+            val sz = (19 * d * 1.25f).toInt()
+            val cx = tmp.centerX().toInt(); val cy = tmp.centerY().toInt()
+            dr.setBounds(cx - sz / 2, cy - sz / 2, cx + sz / 2, cy + sz / 2); dr.draw(c)
+        }
     }
 }
